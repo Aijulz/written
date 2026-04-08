@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes">
-    <title>DeepSeek 移动助手 | 对话自动保存</title>
+    <title>DeepSeek 移动助手 | 回车换行 按钮发送</title>
     <style>
         * {
             margin: 0;
@@ -251,7 +251,7 @@
 <div class="app-container">
     <div class="header">
         <h1>DeepSeek · 随身AI</h1>
-        <p>对话自动保存 | 关闭网页也不丢失</p>
+        <p>回车换行 | 按钮发送 | 对话自动保存</p>
         <div class="api-status">
             <span id="apiStatusBadge" class="status-badge">⚙️ 未配置密钥</span>
             <button id="resetApiKeyBtn" class="reset-key-btn">✏️ 更换密钥</button>
@@ -264,7 +264,7 @@
 
     <div class="input-area">
         <div class="input-wrapper">
-            <textarea id="userInput" placeholder="输入消息... (支持换行，发送按钮提交)" rows="1"></textarea>
+            <textarea id="userInput" placeholder="输入消息... (回车换行，点击发送按钮提交)" rows="1"></textarea>
         </div>
         <button id="sendButton" class="send-btn" aria-label="发送">
             <svg viewBox="0 0 24 24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
@@ -293,7 +293,7 @@
     const globalErrorContainer = document.getElementById('globalErrorContainer');
     
     // 状态
-    let messages = [];      // API 上下文 { role, content }
+    let messages = [];
     let isLoading = false;
     
     // ---------- 存储 KEY ----------
@@ -322,12 +322,9 @@
         }
     }
     
-    // ---------- 对话存储 (自动保存/恢复) ----------
+    // ---------- 对话存储 ----------
     function saveConversation() {
-        // 保存 messages（不含 system 消息？为了恢复后继续对话，保存整个 messages 数组）
-        // 注意：messages 中可能包含 system 消息，我们全部保存
         localStorage.setItem('deepseek_conversation', JSON.stringify(messages));
-        // 同时保存 UI 显示不需要单独保存，因为 messages 包含了完整对话历史
     }
     
     function loadConversation() {
@@ -348,18 +345,15 @@
         localStorage.removeItem('deepseek_conversation');
     }
     
-    // 渲染整个对话历史到 UI
     function renderAllMessages() {
         chatArea.innerHTML = '';
-        // messages 中可能包含 system 消息，但不需要显示给用户，过滤掉
         const displayMessages = messages.filter(m => m.role !== 'system');
         for (const msg of displayMessages) {
-            appendMessageToUI(msg.role, msg.content, null, false); // 不自动滚动，最后统一滚动
+            appendMessageToUI(msg.role, msg.content, null, false);
         }
         scrollToBottom();
     }
     
-    // 追加单条消息到 UI（并可选择是否保存）
     function appendMessageToUI(role, content, timestamp = null, autoSave = true) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${role}`;
@@ -378,21 +372,17 @@
         return messageDiv;
     }
     
-    // 重置对话（清空历史并保存）
     function resetConversation() {
         messages = [];
-        // 添加系统提示
         messages.push({
             role: "system",
             content: "You are DeepSeek, a helpful, respectful and honest assistant. Always respond in the same language as the user."
         });
-        // 清空 UI
         chatArea.innerHTML = '';
         appendMessageToUI('assistant', '✨ 对话已重置。我是 DeepSeek 助手，有什么可以帮你的吗？');
-        saveConversation();  // 保存空状态
+        saveConversation();
     }
     
-    // 清空并重新开始（用户主动清空）
     function clearAllChat() {
         if (isLoading) {
             showTemporaryError("请等待回复完成后再清空", 1500);
@@ -402,7 +392,6 @@
         showTemporaryError("🧹 对话已清空，历史记录已删除", 1500);
     }
     
-    // 导出对话为文本文件
     function exportChat() {
         const exportMessages = messages.filter(m => m.role !== 'system');
         if (exportMessages.length === 0) {
@@ -428,7 +417,6 @@
         showTemporaryError("✅ 对话已导出到下载文件夹", 2000);
     }
     
-    // ---------- UI 辅助 ----------
     function showTemporaryError(message, duration = 4000) {
         const errorDiv = document.createElement('div');
         errorDiv.className = 'error-banner';
@@ -479,12 +467,10 @@
         userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
     }
     
-    // ---------- API 调用 ----------
     async function callDeepSeekAPI(userMessage) {
         const apiKey = getCurrentApiKey();
         if (!apiKey) throw new Error("NO_API_KEY");
         
-        // 用户消息已在外层 push，这里不再重复 push
         const requestBody = {
             model: DEFAULT_MODEL,
             messages: messages,
@@ -519,7 +505,6 @@
         return assistantReply;
     }
     
-    // 发送消息
     async function sendMessage() {
         if (isLoading) {
             showTemporaryError("请等待上一个回复完成", 1500);
@@ -539,7 +524,7 @@
         appendMessageToUI('user', text);
         
         messages.push({ role: "user", content: text });
-        saveConversation();  // 立即保存用户消息
+        saveConversation();
         
         isLoading = true;
         sendBtn.classList.add('disabled');
@@ -549,7 +534,7 @@
             const reply = await callDeepSeekAPI(text);
             removeTypingIndicator();
             appendMessageToUI('assistant', reply);
-            saveConversation();  // 保存助手回复
+            saveConversation();
         } catch (err) {
             removeTypingIndicator();
             console.error(err);
@@ -565,7 +550,6 @@
                 errorMsg = "账户余额不足，请充值";
             }
             appendMessageToUI('assistant', `❌ 错误：${errorMsg}`);
-            // 移除刚刚添加的用户消息（因为 API 失败）
             if (messages.length > 0 && messages[messages.length-1].role === "user") {
                 messages.pop();
                 saveConversation();
@@ -578,7 +562,6 @@
         }
     }
     
-    // 更换密钥
     function promptApiKey() {
         const current = getCurrentApiKey();
         let newKey = prompt("🔑 请输入 DeepSeek API Key", current);
@@ -595,13 +578,10 @@
         }
     }
     
-    // ---------- 初始化 ----------
     function init() {
         updateApiStatusUI();
-        // 尝试加载对话历史
         const hasHistory = loadConversation();
         if (hasHistory && messages.length > 0) {
-            // 确保有 system 消息（如果没有就补一个）
             if (!messages.some(m => m.role === 'system')) {
                 messages.unshift({
                     role: "system",
@@ -611,21 +591,23 @@
             }
             renderAllMessages();
         } else {
-            // 全新开始
             resetConversation();
         }
         
-        // 绑定事件
         sendBtn.addEventListener('click', sendMessage);
         resetKeyBtn.addEventListener('click', promptApiKey);
         clearChatBtn.addEventListener('click', clearAllChat);
         exportChatBtn.addEventListener('click', exportChat);
+        
+        // 关键修改：回车只换行，不发送
         userInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
+            if (e.key === 'Enter') {
+                // 不做任何事，让回车自然换行
+                // 不调用 preventDefault 也不调用 sendMessage
+                return;
             }
         });
+        
         userInput.addEventListener('input', autoResizeTextarea);
         autoResizeTextarea();
     }
