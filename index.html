@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes">
-    <title>DeepSeek 移动助手 | 安卓手机端AI对话</title>
+    <title>DeepSeek 移动助手 | 对话自动保存</title>
     <style>
         * {
             margin: 0;
@@ -20,7 +20,6 @@
             min-height: 100vh;
         }
 
-        /* 主容器 */
         .app-container {
             max-width: 700px;
             margin: 0 auto;
@@ -34,7 +33,6 @@
             background: #ffffff;
         }
 
-        /* 头部 */
         .header {
             background: #ffffff;
             padding: 20px 20px 12px;
@@ -76,7 +74,7 @@
             background: #ffe8e6;
             color: #b91c1c;
         }
-        .reset-key-btn {
+        .reset-key-btn, .export-btn {
             background: none;
             border: 1px solid #cfdfed;
             padding: 4px 12px;
@@ -86,11 +84,10 @@
             cursor: pointer;
             transition: 0.2s;
         }
-        .reset-key-btn:active {
+        .reset-key-btn:active, .export-btn:active {
             background: #f0f4fa;
         }
 
-        /* 聊天区域 */
         .chat-area {
             flex: 1;
             overflow-y: auto;
@@ -101,7 +98,6 @@
             scroll-behavior: smooth;
             background: #fafcff;
         }
-        /* 消息气泡 */
         .message {
             display: flex;
             flex-direction: column;
@@ -168,7 +164,6 @@
             to { opacity: 1; transform: translateY(0);}
         }
 
-        /* 底部输入区 */
         .input-area {
             background: white;
             border-top: 1px solid #eef2f8;
@@ -229,16 +224,6 @@
             stroke-width: 2;
         }
 
-        /* 提示条 & 错误 */
-        .info-tip {
-            background: #fef9e3;
-            margin: 8px 16px 0;
-            border-radius: 20px;
-            padding: 8px 12px;
-            font-size: 0.7rem;
-            color: #b45309;
-            text-align: center;
-        }
         .error-banner {
             background: #fee2e2;
             color: #b91c1c;
@@ -249,14 +234,6 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-        }
-        .clear-chat {
-            background: none;
-            border: none;
-            font-size: 0.7rem;
-            color: #5f7f9e;
-            text-decoration: underline;
-            margin-left: 10px;
         }
         footer {
             text-align: center;
@@ -274,23 +251,16 @@
 <div class="app-container">
     <div class="header">
         <h1>DeepSeek · 随身AI</h1>
-        <p>安卓手机端适配 | 官方API对话</p>
+        <p>对话自动保存 | 关闭网页也不丢失</p>
         <div class="api-status">
             <span id="apiStatusBadge" class="status-badge">⚙️ 未配置密钥</span>
             <button id="resetApiKeyBtn" class="reset-key-btn">✏️ 更换密钥</button>
+            <button id="exportChatBtn" class="export-btn">📄 导出对话</button>
             <button id="clearChatBtn" class="reset-key-btn" style="margin-left: auto;">🗑 清空对话</button>
         </div>
     </div>
 
-    <div class="chat-area" id="chatArea">
-        <div class="message assistant">
-            <div class="bubble">
-                👋 你好！我是 DeepSeek AI 助手。<br>
-                请先在上方点击「更换密钥」输入你的 DeepSeek API Key，然后就可以开始对话啦。
-            </div>
-            <div class="message-time">刚刚</div>
-        </div>
-    </div>
+    <div class="chat-area" id="chatArea"></div>
 
     <div class="input-area">
         <div class="input-wrapper">
@@ -304,14 +274,12 @@
         </button>
     </div>
     <div id="globalErrorContainer"></div>
-    <footer>数据通过 DeepSeek 官方 API 处理 | 密钥本地存储</footer>
+    <footer>数据通过 DeepSeek 官方 API 处理 | 对话记录自动保存在本地</footer>
 </div>
 
 <script>
     // ---------- 配置 ----------
-    // DeepSeek 官方 API 地址 (兼容 OpenAI 风格)
     const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
-    // 推荐模型: deepseek-chat 或 deepseek-reasoner，这里使用 deepseek-chat 性价比高
     const DEFAULT_MODEL = "deepseek-chat";
     
     // DOM 元素
@@ -320,120 +288,83 @@
     const sendBtn = document.getElementById('sendButton');
     const resetKeyBtn = document.getElementById('resetApiKeyBtn');
     const clearChatBtn = document.getElementById('clearChatBtn');
+    const exportChatBtn = document.getElementById('exportChatBtn');
     const apiStatusBadge = document.getElementById('apiStatusBadge');
     const globalErrorContainer = document.getElementById('globalErrorContainer');
     
-    // 状态管理
-    let messages = [];      // 存储 { role, content } 用于API上下文
-    let isLoading = false;  // 是否正在请求中
-    let currentApiKey = ""; // 当前使用的API Key
+    // 状态
+    let messages = [];      // API 上下文 { role, content }
+    let isLoading = false;
     
-    // ---------- 存储 KEY 操作 ----------
-    function loadApiKey() {
-        const storedKey = localStorage.getItem('deepseek_api_key');
-        if (storedKey && storedKey.trim() !== "") {
-            currentApiKey = storedKey.trim();
-            updateApiStatusUI(true);
-        } else {
-            currentApiKey = "";
-            updateApiStatusUI(false);
-        }
+    // ---------- 存储 KEY ----------
+    function getCurrentApiKey() {
+        return localStorage.getItem('deepseek_api_key')?.trim() || "";
     }
     
-    function saveApiKey(key) {
-        if (key && key.trim() !== "") {
+    function saveApiKeyToLocal(key) {
+        if (key && key.trim()) {
             localStorage.setItem('deepseek_api_key', key.trim());
-            currentApiKey = key.trim();
-            updateApiStatusUI(true);
         } else {
             localStorage.removeItem('deepseek_api_key');
-            currentApiKey = "";
-            updateApiStatusUI(false);
         }
+        updateApiStatusUI();
     }
     
-    function updateApiStatusUI(valid) {
-        if (valid && currentApiKey) {
-            // 显示密钥脱敏
-            const masked = currentApiKey.length > 12 ? currentApiKey.slice(0,8) + '...' + currentApiKey.slice(-4) : '已配置';
+    function updateApiStatusUI() {
+        const key = getCurrentApiKey();
+        if (key) {
+            const masked = key.length > 12 ? key.slice(0,8) + '...' + key.slice(-4) : '已配置';
             apiStatusBadge.innerHTML = `✅ API Key: ${masked}`;
             apiStatusBadge.className = "status-badge valid";
         } else {
-            apiStatusBadge.innerHTML = `⚠️ 未配置或无效 Key`;
+            apiStatusBadge.innerHTML = `⚠️ 未配置 Key`;
             apiStatusBadge.className = "status-badge invalid";
         }
     }
     
-    // 更换密钥弹窗 (移动端友好)
-    function promptApiKey() {
-        let newKey = prompt("🔑 请输入你的 DeepSeek API Key\n(获取地址: platform.deepseek.com/api_keys)", currentApiKey || "");
-        if (newKey !== null) {
-            newKey = newKey.trim();
-            if (newKey === "") {
-                saveApiKey("");
-                showTemporaryError("API Key 已清空，请配置后再使用对话功能。", 3000);
-                // 清空上下文并重置欢迎消息? 不清空上下文，但后续对话会因为没有key而提示
-                // 为了避免混淆，清一下上下文比较好
-                resetConversation();
-                return;
-            } else {
-                saveApiKey(newKey);
-                showTemporaryError("✅ API Key 已保存！可以开始对话了。", 2000);
-                // 重置会话，让新key干净开始
-                resetConversation();
-            }
+    // ---------- 对话存储 (自动保存/恢复) ----------
+    function saveConversation() {
+        // 保存 messages（不含 system 消息？为了恢复后继续对话，保存整个 messages 数组）
+        // 注意：messages 中可能包含 system 消息，我们全部保存
+        localStorage.setItem('deepseek_conversation', JSON.stringify(messages));
+        // 同时保存 UI 显示不需要单独保存，因为 messages 包含了完整对话历史
+    }
+    
+    function loadConversation() {
+        const saved = localStorage.getItem('deepseek_conversation');
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    messages = parsed;
+                    return true;
+                }
+            } catch(e) {}
         }
+        return false;
     }
     
-    // 显示临时错误/提示 (在顶部浮动)
-    let errorTimeout = null;
-    function showTemporaryError(message, duration = 4000) {
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'error-banner';
-        errorDiv.innerHTML = `<span>⚠️ ${message}</span><button style="background:none; border:none; font-weight:bold; margin-left:8px;">✖</button>`;
-        const closeBtn = errorDiv.querySelector('button');
-        closeBtn.addEventListener('click', () => errorDiv.remove());
-        globalErrorContainer.innerHTML = '';
-        globalErrorContainer.appendChild(errorDiv);
-        if (errorTimeout) clearTimeout(errorTimeout);
-        errorTimeout = setTimeout(() => {
-            if (errorDiv && errorDiv.parentNode) errorDiv.remove();
-        }, duration);
+    function clearConversationStorage() {
+        localStorage.removeItem('deepseek_conversation');
     }
     
-    // 清空对话 (本地聊天记录)
-    function resetConversation() {
-        messages = [];   // 清空上下文
-        // 清空聊天界面但保留默认欢迎消息
+    // 渲染整个对话历史到 UI
+    function renderAllMessages() {
         chatArea.innerHTML = '';
-        // 添加一个全新的助手欢迎消息
-        appendMessageToUI('assistant', '👋 对话已重置！我是 DeepSeek 助手，有什么可以帮你的吗？');
-        // 同时系统消息可以加一个友好的系统提示但不需要存储到messages
-        // 可选: 在messages中初始化一条 system 指令 (但不是必须)
-        messages.push({
-            role: "system",
-            content: "You are DeepSeek, a helpful, respectful and honest assistant. Always respond in the same language as the user."
-        });
+        // messages 中可能包含 system 消息，但不需要显示给用户，过滤掉
+        const displayMessages = messages.filter(m => m.role !== 'system');
+        for (const msg of displayMessages) {
+            appendMessageToUI(msg.role, msg.content, null, false); // 不自动滚动，最后统一滚动
+        }
         scrollToBottom();
     }
     
-    // 清空UI只保留系统消息 (内部调用reset)
-    function hardClearChat() {
-        if (!isLoading) {
-            resetConversation();
-            showTemporaryError("🧹 聊天记录已清空", 1500);
-        } else {
-            showTemporaryError("请等待当前回复完成后再清空", 1500);
-        }
-    }
-    
-    // 将消息渲染到UI
-    function appendMessageToUI(role, content, timestamp = null) {
+    // 追加单条消息到 UI（并可选择是否保存）
+    function appendMessageToUI(role, content, timestamp = null, autoSave = true) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${role}`;
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
-        // 简单markdown换行处理 (支持\n)
         bubble.innerHTML = content.replace(/\n/g, '<br>');
         const timeSpan = document.createElement('div');
         timeSpan.className = 'message-time';
@@ -443,11 +374,74 @@
         messageDiv.appendChild(bubble);
         messageDiv.appendChild(timeSpan);
         chatArea.appendChild(messageDiv);
-        scrollToBottom();
+        if (autoSave) scrollToBottom();
         return messageDiv;
     }
     
-    // 显示“正在输入...”指示器
+    // 重置对话（清空历史并保存）
+    function resetConversation() {
+        messages = [];
+        // 添加系统提示
+        messages.push({
+            role: "system",
+            content: "You are DeepSeek, a helpful, respectful and honest assistant. Always respond in the same language as the user."
+        });
+        // 清空 UI
+        chatArea.innerHTML = '';
+        appendMessageToUI('assistant', '✨ 对话已重置。我是 DeepSeek 助手，有什么可以帮你的吗？');
+        saveConversation();  // 保存空状态
+    }
+    
+    // 清空并重新开始（用户主动清空）
+    function clearAllChat() {
+        if (isLoading) {
+            showTemporaryError("请等待回复完成后再清空", 1500);
+            return;
+        }
+        resetConversation();
+        showTemporaryError("🧹 对话已清空，历史记录已删除", 1500);
+    }
+    
+    // 导出对话为文本文件
+    function exportChat() {
+        const exportMessages = messages.filter(m => m.role !== 'system');
+        if (exportMessages.length === 0) {
+            showTemporaryError("没有对话记录可导出", 1500);
+            return;
+        }
+        let exportText = "DeepSeek 对话导出\n";
+        exportText += `导出时间: ${new Date().toLocaleString()}\n`;
+        exportText += "=".repeat(40) + "\n\n";
+        for (const msg of exportMessages) {
+            const roleName = msg.role === 'user' ? '👤 我' : '🤖 DeepSeek';
+            exportText += `【${roleName}】\n${msg.content}\n\n`;
+        }
+        const blob = new Blob([exportText], { type: 'text/plain' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.href = url;
+        link.download = `deepseek_chat_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showTemporaryError("✅ 对话已导出到下载文件夹", 2000);
+    }
+    
+    // ---------- UI 辅助 ----------
+    function showTemporaryError(message, duration = 4000) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-banner';
+        errorDiv.innerHTML = `<span>⚠️ ${message}</span><button style="background:none; border:none; font-weight:bold; margin-left:8px;">✖</button>`;
+        const closeBtn = errorDiv.querySelector('button');
+        closeBtn.addEventListener('click', () => errorDiv.remove());
+        globalErrorContainer.innerHTML = '';
+        globalErrorContainer.appendChild(errorDiv);
+        setTimeout(() => {
+            if (errorDiv && errorDiv.parentNode) errorDiv.remove();
+        }, duration);
+    }
+    
     let typingIndicatorElement = null;
     function showTypingIndicator() {
         removeTypingIndicator();
@@ -458,8 +452,7 @@
         bubbleWrap.className = 'bubble';
         bubbleWrap.style.background = "#f1f5f9";
         bubbleWrap.style.padding = "12px 18px";
-        const typingHtml = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
-        bubbleWrap.innerHTML = typingHtml;
+        bubbleWrap.innerHTML = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
         indicatorDiv.appendChild(bubbleWrap);
         const timeSpan = document.createElement('div');
         timeSpan.className = 'message-time';
@@ -481,35 +474,30 @@
         chatArea.scrollTop = chatArea.scrollHeight;
     }
     
-    // 自适应文本框高度
     function autoResizeTextarea() {
         userInput.style.height = 'auto';
         userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
     }
     
-    // 调用 DeepSeek API
+    // ---------- API 调用 ----------
     async function callDeepSeekAPI(userMessage) {
-        if (!currentApiKey || currentApiKey.trim() === "") {
-            throw new Error("请先设置有效的 DeepSeek API Key (点击「更换密钥」)");
-        }
+        const apiKey = getCurrentApiKey();
+        if (!apiKey) throw new Error("NO_API_KEY");
         
-        // 将用户消息加入到 messages 上下文
-        messages.push({ role: "user", content: userMessage });
-        
-        // 构建请求体
+        // 用户消息已在外层 push，这里不再重复 push
         const requestBody = {
             model: DEFAULT_MODEL,
             messages: messages,
             temperature: 0.7,
             max_tokens: 2048,
-            stream: false   // 为了简单实现，非流式; 手机端体验也够
+            stream: false
         };
         
         const response = await fetch(DEEPSEEK_API_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentApiKey}`
+                'Authorization': `Bearer ${apiKey}`
             },
             body: JSON.stringify(requestBody)
         });
@@ -520,21 +508,18 @@
                 const errData = await response.json();
                 errorDetail = errData.error?.message || JSON.stringify(errData);
             } catch(e) {}
-            throw new Error(`API 请求失败: ${errorDetail}`);
+            throw new Error(errorDetail);
         }
         
         const data = await response.json();
-        if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-            throw new Error("API 返回数据格式异常");
-        }
+        if (!data.choices?.[0]?.message) throw new Error("API 返回格式异常");
         
         const assistantReply = data.choices[0].message.content;
-        // 将助手回复存入上下文
         messages.push({ role: "assistant", content: assistantReply });
         return assistantReply;
     }
     
-    // 发送消息主流程
+    // 发送消息
     async function sendMessage() {
         if (isLoading) {
             showTemporaryError("请等待上一个回复完成", 1500);
@@ -543,48 +528,47 @@
         let text = userInput.value.trim();
         if (text === "") return;
         
-        // 未配置key时的拦截
-        if (!currentApiKey) {
-            showTemporaryError("🔑 请先点击「更换密钥」配置你的 DeepSeek API Key", 3000);
+        const apiKey = getCurrentApiKey();
+        if (!apiKey) {
+            showTemporaryError("🔑 请先点击「更换密钥」配置 DeepSeek API Key", 3000);
             return;
         }
         
-        // 清空输入框
         userInput.value = "";
         autoResizeTextarea();
-        // 显示用户消息
         appendMessageToUI('user', text);
+        
+        messages.push({ role: "user", content: text });
+        saveConversation();  // 立即保存用户消息
         
         isLoading = true;
         sendBtn.classList.add('disabled');
         showTypingIndicator();
         
         try {
-            const assistantReply = await callDeepSeekAPI(text);
+            const reply = await callDeepSeekAPI(text);
             removeTypingIndicator();
-            appendMessageToUI('assistant', assistantReply);
+            appendMessageToUI('assistant', reply);
+            saveConversation();  // 保存助手回复
         } catch (err) {
             removeTypingIndicator();
-            console.error("DeepSeek API 错误:", err);
+            console.error(err);
             let errorMsg = err.message;
-            // 增强可读性
-            if (errorMsg.includes("401")) {
-                errorMsg = "API Key 无效或已过期，请重新更换密钥。";
-                saveApiKey("");  // 自动清空无效key
-                updateApiStatusUI(false);
+            if (errorMsg.includes("NO_API_KEY")) {
+                errorMsg = "未配置 API Key，请点击「更换密钥」设置";
+            } else if (errorMsg.includes("401") || errorMsg.includes("Incorrect API key")) {
+                errorMsg = "API Key 无效，请重新更换密钥";
+                saveApiKeyToLocal("");
             } else if (errorMsg.includes("429")) {
-                errorMsg = "请求频率过高，请稍后再试。";
-            } else if (errorMsg.includes("402") || errorMsg.includes("insufficient")) {
-                errorMsg = "账户余额不足，请检查 DeepSeek 账户。";
-            } else {
-                errorMsg = `出错: ${errorMsg}`;
+                errorMsg = "请求频率过高，请稍后再试";
+            } else if (errorMsg.includes("insufficient")) {
+                errorMsg = "账户余额不足，请充值";
             }
-            // 在UI中展示错误提示并显示助手错误消息
-            appendMessageToUI('assistant', `❌ 抱歉，发生错误：${errorMsg}\n\n请检查 API Key 或网络后重试。`);
-            // 重要: 如果调用失败, 需要将之前 push 的用户消息从上下文中移除，避免污染上下文
-            // 因为用户消息已 push，但是 API 失败未获得 assistant 回复，要 pop 掉
+            appendMessageToUI('assistant', `❌ 错误：${errorMsg}`);
+            // 移除刚刚添加的用户消息（因为 API 失败）
             if (messages.length > 0 && messages[messages.length-1].role === "user") {
                 messages.pop();
+                saveConversation();
             }
         } finally {
             isLoading = false;
@@ -594,58 +578,59 @@
         }
     }
     
-    // 监听发送事件
-    function initEventListeners() {
-        sendBtn.addEventListener('click', sendMessage);
-        resetKeyBtn.addEventListener('click', () => {
-            promptApiKey();
-        });
-        clearChatBtn.addEventListener('click', () => {
-            if (isLoading) {
-                showTemporaryError("请等待回复完成后再清空", 1500);
-                return;
+    // 更换密钥
+    function promptApiKey() {
+        const current = getCurrentApiKey();
+        let newKey = prompt("🔑 请输入 DeepSeek API Key", current);
+        if (newKey !== null) {
+            newKey = newKey.trim();
+            if (newKey === "") {
+                saveApiKeyToLocal("");
+                showTemporaryError("API Key 已清空", 1500);
+                resetConversation();
+            } else {
+                saveApiKeyToLocal(newKey);
+                showTemporaryError("✅ API Key 已保存，对话历史保持不变", 2000);
             }
-            hardClearChat();
-        });
+        }
+    }
+    
+    // ---------- 初始化 ----------
+    function init() {
+        updateApiStatusUI();
+        // 尝试加载对话历史
+        const hasHistory = loadConversation();
+        if (hasHistory && messages.length > 0) {
+            // 确保有 system 消息（如果没有就补一个）
+            if (!messages.some(m => m.role === 'system')) {
+                messages.unshift({
+                    role: "system",
+                    content: "You are DeepSeek, a helpful assistant. Always respond in the same language as the user."
+                });
+                saveConversation();
+            }
+            renderAllMessages();
+        } else {
+            // 全新开始
+            resetConversation();
+        }
+        
+        // 绑定事件
+        sendBtn.addEventListener('click', sendMessage);
+        resetKeyBtn.addEventListener('click', promptApiKey);
+        clearChatBtn.addEventListener('click', clearAllChat);
+        exportChatBtn.addEventListener('click', exportChat);
         userInput.addEventListener('keydown', (e) => {
-            // 在安卓手机上，回车键通常发送，但 shift+enter 换行。适配软键盘
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
             }
         });
         userInput.addEventListener('input', autoResizeTextarea);
-        // 初始自适应
         autoResizeTextarea();
     }
     
-    // 初始化聊天上下文以及本地存储Key，并展示默认系统消息
-    function initConversation() {
-        // 重置messages数组，添加系统提示
-        messages = [];
-        messages.push({
-            role: "system",
-            content: "You are DeepSeek, a helpful assistant. Answer concisely and in the same language as the user."
-        });
-        // 清空UI区域但保留助手欢迎消息 (避免重复添加)
-        chatArea.innerHTML = '';
-        appendMessageToUI('assistant', '✨ 已连接 DeepSeek 官方 API。\n💡 点击「更换密钥」输入你的 API Key 即可开始对话。');
-    }
-    
-    // 入口初始化
-    function bootstrap() {
-        loadApiKey();
-        initConversation();
-        initEventListeners();
-        // 如果没有API Key，给出温和提示
-        if (!currentApiKey) {
-            setTimeout(() => {
-                showTemporaryError("📌 开始之前，请点击「更换密钥」设置 DeepSeek API Key（从 platform.deepseek.com 获取）", 5000);
-            }, 500);
-        }
-    }
-    
-    bootstrap();
+    init();
 </script>
 </body>
 </html>
