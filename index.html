@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=yes">
-    <title>DeepSeek 移动助手 | 回车换行 按钮发送</title>
+    <title>DeepSeek 移动助手 | 编辑提问 + 重写回答</title>
     <style>
         * {
             margin: 0;
@@ -103,6 +103,7 @@
             flex-direction: column;
             max-width: 88%;
             animation: fadeInUp 0.2s ease;
+            position: relative;
         }
         .message.user {
             align-self: flex-end;
@@ -117,6 +118,7 @@
             line-height: 1.45;
             word-break: break-word;
             box-shadow: 0 1px 1px rgba(0,0,0,0.03);
+            position: relative;
         }
         .user .bubble {
             background: #0f172a;
@@ -137,6 +139,48 @@
         .user .message-time {
             text-align: right;
         }
+        
+        /* 消息操作按钮 */
+        .message-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 4px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .message:hover .message-actions,
+        .message-actions:focus-within {
+            opacity: 1;
+        }
+        /* 手机端：轻触消息显示按钮 */
+        @media (max-width: 768px) {
+            .message-actions {
+                opacity: 1;
+            }
+        }
+        .action-btn {
+            background: none;
+            border: none;
+            font-size: 0.7rem;
+            color: #5f7f9e;
+            padding: 4px 8px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .action-btn:active {
+            background: #eef2f6;
+        }
+        .action-btn.edit-btn { color: #3b82f6; }
+        .action-btn.rewrite-btn { color: #10b981; }
+        
+        .edited-badge {
+            font-size: 0.6rem;
+            color: #8e9dae;
+            margin-left: 8px;
+        }
+
         .typing-indicator {
             display: flex;
             align-items: center;
@@ -251,7 +295,7 @@
 <div class="app-container">
     <div class="header">
         <h1>DeepSeek · 随身AI</h1>
-        <p>回车换行 | 按钮发送 | 对话自动保存</p>
+        <p>编辑提问 | 重写回答 | 自动保存</p>
         <div class="api-status">
             <span id="apiStatusBadge" class="status-badge">⚙️ 未配置密钥</span>
             <button id="resetApiKeyBtn" class="reset-key-btn">✏️ 更换密钥</button>
@@ -274,7 +318,7 @@
         </button>
     </div>
     <div id="globalErrorContainer"></div>
-    <footer>数据通过 DeepSeek 官方 API 处理 | 对话记录自动保存在本地</footer>
+    <footer>数据通过 DeepSeek 官方 API 处理 | 点击消息旁按钮可编辑或重写</footer>
 </div>
 
 <script>
@@ -293,8 +337,9 @@
     const globalErrorContainer = document.getElementById('globalErrorContainer');
     
     // 状态
-    let messages = [];
+    let messages = [];      // API 上下文 { role, content, isEdited? }
     let isLoading = false;
+    let editingTarget = null;  // 正在编辑的消息索引
     
     // ---------- 存储 KEY ----------
     function getCurrentApiKey() {
@@ -345,76 +390,322 @@
         localStorage.removeItem('deepseek_conversation');
     }
     
+    // ---------- UI 渲染 ----------
     function renderAllMessages() {
         chatArea.innerHTML = '';
         const displayMessages = messages.filter(m => m.role !== 'system');
-        for (const msg of displayMessages) {
-            appendMessageToUI(msg.role, msg.content, null, false);
+        for (let i = 0; i < messages.length; i++) {
+            const msg = messages[i];
+            if (msg.role === 'system') continue;
+            appendMessageToUI(msg.role, msg.content, null, false, i);
         }
         scrollToBottom();
     }
     
-    function appendMessageToUI(role, content, timestamp = null, autoSave = true) {
+    function appendMessageToUI(role, content, timestamp = null, autoSave = true, index = null) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${role}`;
+        messageDiv.setAttribute('data-index', index !== null ? index : messages.length - 1);
+        
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
         bubble.innerHTML = content.replace(/\n/g, '<br>');
+        
         const timeSpan = document.createElement('div');
         timeSpan.className = 'message-time';
         const now = timestamp || new Date();
         const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
         timeSpan.innerText = timeStr;
+        
+        // 操作按钮区
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'message-actions';
+        
+        if (role === 'user') {
+            const editBtn = document.createElement('button');
+            editBtn.className = 'action-btn edit-btn';
+            editBtn.innerHTML = '✏️ 编辑';
+            editBtn.onclick = () => startEditMessage(messageDiv.getAttribute('data-index'));
+            actionsDiv.appendChild(editBtn);
+        } else if (role === 'assistant') {
+            const rewriteBtn = document.createElement('button');
+            rewriteBtn.className = 'action-btn rewrite-btn';
+            rewriteBtn.innerHTML = '🔄 重写';
+            rewriteBtn.onclick = () => rewriteMessage(messageDiv.getAttribute('data-index'));
+            actionsDiv.appendChild(rewriteBtn);
+        }
+        
+        // 如果有编辑标记
+        if (messages[messageDiv.getAttribute('data-index')]?.edited) {
+            const editedBadge = document.createElement('span');
+            editedBadge.className = 'edited-badge';
+            editedBadge.innerText = '(已编辑)';
+            timeSpan.appendChild(editedBadge);
+        }
+        
         messageDiv.appendChild(bubble);
         messageDiv.appendChild(timeSpan);
+        messageDiv.appendChild(actionsDiv);
         chatArea.appendChild(messageDiv);
+        
         if (autoSave) scrollToBottom();
         return messageDiv;
     }
     
-    function resetConversation() {
-        messages = [];
-        messages.push({
-            role: "system",
-            content: "You are DeepSeek, a helpful, respectful and honest assistant. Always respond in the same language as the user."
-        });
-        chatArea.innerHTML = '';
-        appendMessageToUI('assistant', '✨ 对话已重置。我是 DeepSeek 助手，有什么可以帮你的吗？');
-        saveConversation();
+    // 重新渲染单条消息
+    function rerenderMessage(index) {
+        const msg = messages[index];
+        if (!msg || msg.role === 'system') return;
+        const oldDiv = chatArea.querySelector(`.message[data-index='${index}']`);
+        if (oldDiv) oldDiv.remove();
+        // 重新计算显示位置，需要保持顺序
+        let displayIdx = 0;
+        for (let i = 0; i <= index; i++) {
+            if (messages[i].role !== 'system') displayIdx++;
+        }
+        // 简单点：全部重绘
+        renderAllMessages();
     }
     
-    function clearAllChat() {
+    // 编辑消息
+    function startEditMessage(index) {
         if (isLoading) {
-            showTemporaryError("请等待回复完成后再清空", 1500);
+            showTemporaryError("请等待回复完成后再编辑", 1500);
             return;
         }
-        resetConversation();
-        showTemporaryError("🧹 对话已清空，历史记录已删除", 1500);
+        const msg = messages[parseInt(index)];
+        if (!msg || msg.role !== 'user') return;
+        
+        userInput.value = msg.content;
+        userInput.focus();
+        autoResizeTextarea();
+        editingTarget = parseInt(index);
+        showTemporaryError("✏️ 修改内容后点击发送，将替换原消息", 3000);
     }
     
-    function exportChat() {
-        const exportMessages = messages.filter(m => m.role !== 'system');
-        if (exportMessages.length === 0) {
-            showTemporaryError("没有对话记录可导出", 1500);
+    // 重写 AI 回复
+    async function rewriteMessage(index) {
+        if (isLoading) {
+            showTemporaryError("请等待当前操作完成", 1500);
             return;
         }
-        let exportText = "DeepSeek 对话导出\n";
-        exportText += `导出时间: ${new Date().toLocaleString()}\n`;
-        exportText += "=".repeat(40) + "\n\n";
-        for (const msg of exportMessages) {
-            const roleName = msg.role === 'user' ? '👤 我' : '🤖 DeepSeek';
-            exportText += `【${roleName}】\n${msg.content}\n\n`;
+        const idx = parseInt(index);
+        const assistantMsg = messages[idx];
+        if (!assistantMsg || assistantMsg.role !== 'assistant') return;
+        
+        // 找到对应的用户消息（前一条非 system）
+        let userMsgIndex = idx - 1;
+        while (userMsgIndex >= 0 && messages[userMsgIndex].role === 'system') {
+            userMsgIndex--;
         }
-        const blob = new Blob([exportText], { type: 'text/plain' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        link.href = url;
-        link.download = `deepseek_chat_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        showTemporaryError("✅ 对话已导出到下载文件夹", 2000);
+        if (userMsgIndex < 0 || messages[userMsgIndex].role !== 'user') {
+            showTemporaryError("找不到对应的用户消息，无法重写", 1500);
+            return;
+        }
+        
+        const userMsgContent = messages[userMsgIndex].content;
+        
+        isLoading = true;
+        sendBtn.classList.add('disabled');
+        showTypingIndicator();
+        
+        try {
+            // 临时删除这条 assistant 消息及其之后的所有消息
+            const afterMessages = messages.slice(idx + 1);
+            messages = messages.slice(0, idx);
+            saveConversation();
+            renderAllMessages();
+            
+            // 重新调用 API
+            const apiKey = getCurrentApiKey();
+            if (!apiKey) throw new Error("NO_API_KEY");
+            
+            // 确保有 system 消息
+            if (messages.length === 0 || messages[0].role !== 'system') {
+                messages.unshift({
+                    role: "system",
+                    content: "You are DeepSeek, a helpful, respectful and honest assistant. Always respond in the same language as the user."
+                });
+            }
+            
+            const requestBody = {
+                model: DEFAULT_MODEL,
+                messages: messages.concat([{ role: "user", content: userMsgContent }]),
+                temperature: 0.7,
+                max_tokens: 2048,
+                stream: false
+            };
+            
+            const response = await fetch(DEEPSEEK_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify(requestBody)
+            });
+            
+            if (!response.ok) {
+                let errorDetail = `HTTP ${response.status}`;
+                try {
+                    const errData = await response.json();
+                    errorDetail = errData.error?.message || JSON.stringify(errData);
+                } catch(e) {}
+                throw new Error(errorDetail);
+            }
+            
+            const data = await response.json();
+            if (!data.choices?.[0]?.message) throw new Error("API 返回格式异常");
+            
+            const newReply = data.choices[0].message.content;
+            
+            // 重新添加用户消息和新的回复
+            messages.push({ role: "user", content: userMsgContent });
+            messages.push({ role: "assistant", content: newReply });
+            
+            // 恢复之后的消息
+            messages.push(...afterMessages);
+            
+            saveConversation();
+            renderAllMessages();
+            removeTypingIndicator();
+            showTemporaryError("✅ 已重新生成回答", 1500);
+            
+        } catch (err) {
+            removeTypingIndicator();
+            let errorMsg = err.message;
+            if (errorMsg.includes("NO_API_KEY")) {
+                errorMsg = "未配置 API Key";
+            } else if (errorMsg.includes("401")) {
+                errorMsg = "API Key 无效";
+                saveApiKeyToLocal("");
+            }
+            showTemporaryError(`重写失败: ${errorMsg}`, 3000);
+            // 恢复原状
+            renderAllMessages();
+        } finally {
+            isLoading = false;
+            sendBtn.classList.remove('disabled');
+        }
+    }
+    
+    // 发送新消息（也处理编辑模式）
+    async function sendMessage() {
+        if (isLoading) {
+            showTemporaryError("请等待上一个回复完成", 1500);
+            return;
+        }
+        let text = userInput.value.trim();
+        if (text === "") return;
+        
+        const apiKey = getCurrentApiKey();
+        if (!apiKey) {
+            showTemporaryError("🔑 请先点击「更换密钥」配置 DeepSeek API Key", 3000);
+            return;
+        }
+        
+        userInput.value = "";
+        autoResizeTextarea();
+        
+        // 处理编辑模式
+        if (editingTarget !== null) {
+            const oldMsg = messages[editingTarget];
+            if (oldMsg && oldMsg.role === 'user') {
+                // 更新用户消息内容
+                oldMsg.content = text;
+                oldMsg.edited = true;
+                // 删除这条用户消息之后的所有消息（包括对应的 AI 回复）
+                messages = messages.slice(0, editingTarget + 1);
+                saveConversation();
+                renderAllMessages();
+                editingTarget = null;
+                
+                // 然后正常发送（会复用上面截断后的上下文）
+                // 继续执行下面的发送逻辑
+            } else {
+                editingTarget = null;
+            }
+        }
+        
+        // 正常发送
+        appendMessageToUI('user', text);
+        
+        messages.push({ role: "user", content: text });
+        saveConversation();
+        
+        isLoading = true;
+        sendBtn.classList.add('disabled');
+        showTypingIndicator();
+        
+        try {
+            // 确保有 system 消息
+            if (messages.length === 0 || messages[0].role !== 'system') {
+                messages.unshift({
+                    role: "system",
+                    content: "You are DeepSeek, a helpful assistant. Always respond in the same language as the user."
+                });
+                saveConversation();
+            }
+            
+            const requestBody = {
+                model: DEFAULT_MODEL,
+                messages: messages,
+                temperature: 0.7,
+                max_tokens: 2048,
+                stream: false
+            };
+            
+            const response = await fetch(DEEPSEEK_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify(requestBody)
+            });
+            
+            if (!response.ok) {
+                let errorDetail = `HTTP ${response.status}`;
+                try {
+                    const errData = await response.json();
+                    errorDetail = errData.error?.message || JSON.stringify(errData);
+                } catch(e) {}
+                throw new Error(errorDetail);
+            }
+            
+            const data = await response.json();
+            if (!data.choices?.[0]?.message) throw new Error("API 返回格式异常");
+            
+            const assistantReply = data.choices[0].message.content;
+            messages.push({ role: "assistant", content: assistantReply });
+            saveConversation();
+            removeTypingIndicator();
+            appendMessageToUI('assistant', assistantReply);
+            
+        } catch (err) {
+            removeTypingIndicator();
+            let errorMsg = err.message;
+            if (errorMsg.includes("NO_API_KEY")) {
+                errorMsg = "未配置 API Key";
+            } else if (errorMsg.includes("401") || errorMsg.includes("Incorrect API key")) {
+                errorMsg = "API Key 无效";
+                saveApiKeyToLocal("");
+            } else if (errorMsg.includes("429")) {
+                errorMsg = "请求频率过高";
+            } else if (errorMsg.includes("insufficient")) {
+                errorMsg = "账户余额不足";
+            }
+            appendMessageToUI('assistant', `❌ 错误：${errorMsg}`);
+            if (messages.length > 0 && messages[messages.length-1].role === "user") {
+                messages.pop();
+                saveConversation();
+            }
+        } finally {
+            isLoading = false;
+            sendBtn.classList.remove('disabled');
+            userInput.focus();
+            scrollToBottom();
+        }
     }
     
     function showTemporaryError(message, duration = 4000) {
@@ -430,7 +721,11 @@
         }, duration);
     }
     
-    let typingIndicatorElement = null;
+    function removeTypingIndicator() {
+        const indicator = document.getElementById('typingIndicator');
+        if (indicator) indicator.remove();
+    }
+    
     function showTypingIndicator() {
         removeTypingIndicator();
         const indicatorDiv = document.createElement('div');
@@ -448,14 +743,6 @@
         indicatorDiv.appendChild(timeSpan);
         chatArea.appendChild(indicatorDiv);
         scrollToBottom();
-        typingIndicatorElement = indicatorDiv;
-    }
-    
-    function removeTypingIndicator() {
-        if (typingIndicatorElement && typingIndicatorElement.parentNode) {
-            typingIndicatorElement.remove();
-            typingIndicatorElement = null;
-        }
     }
     
     function scrollToBottom() {
@@ -467,99 +754,49 @@
         userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
     }
     
-    async function callDeepSeekAPI(userMessage) {
-        const apiKey = getCurrentApiKey();
-        if (!apiKey) throw new Error("NO_API_KEY");
-        
-        const requestBody = {
-            model: DEFAULT_MODEL,
-            messages: messages,
-            temperature: 0.8,
-            max_tokens: 2048,
-            stream: false
-        };
-        
-        const response = await fetch(DEEPSEEK_API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify(requestBody)
+    function resetConversation() {
+        messages = [];
+        messages.push({
+            role: "system",
+            content: "You are DeepSeek, a helpful, respectful and honest assistant. Always respond in the same language as the user."
         });
-        
-        if (!response.ok) {
-            let errorDetail = `HTTP ${response.status}`;
-            try {
-                const errData = await response.json();
-                errorDetail = errData.error?.message || JSON.stringify(errData);
-            } catch(e) {}
-            throw new Error(errorDetail);
-        }
-        
-        const data = await response.json();
-        if (!data.choices?.[0]?.message) throw new Error("API 返回格式异常");
-        
-        const assistantReply = data.choices[0].message.content;
-        messages.push({ role: "assistant", content: assistantReply });
-        return assistantReply;
+        saveConversation();
+        renderAllMessages();
+        appendMessageToUI('assistant', '✨ 对话已重置。我是 DeepSeek 助手，有什么可以帮你的吗？');
     }
     
-    async function sendMessage() {
+    function clearAllChat() {
         if (isLoading) {
-            showTemporaryError("请等待上一个回复完成", 1500);
+            showTemporaryError("请等待回复完成后再清空", 1500);
             return;
         }
-        let text = userInput.value.trim();
-        if (text === "") return;
-        
-        const apiKey = getCurrentApiKey();
-        if (!apiKey) {
-            showTemporaryError("🔑 请先点击「更换密钥」配置 DeepSeek API Key", 3000);
+        resetConversation();
+        showTemporaryError("🧹 对话已清空", 1500);
+    }
+    
+    function exportChat() {
+        const exportMessages = messages.filter(m => m.role !== 'system');
+        if (exportMessages.length === 0) {
+            showTemporaryError("没有对话记录可导出", 1500);
             return;
         }
-        
-        userInput.value = "";
-        autoResizeTextarea();
-        appendMessageToUI('user', text);
-        
-        messages.push({ role: "user", content: text });
-        saveConversation();
-        
-        isLoading = true;
-        sendBtn.classList.add('disabled');
-        showTypingIndicator();
-        
-        try {
-            const reply = await callDeepSeekAPI(text);
-            removeTypingIndicator();
-            appendMessageToUI('assistant', reply);
-            saveConversation();
-        } catch (err) {
-            removeTypingIndicator();
-            console.error(err);
-            let errorMsg = err.message;
-            if (errorMsg.includes("NO_API_KEY")) {
-                errorMsg = "未配置 API Key，请点击「更换密钥」设置";
-            } else if (errorMsg.includes("401") || errorMsg.includes("Incorrect API key")) {
-                errorMsg = "API Key 无效，请重新更换密钥";
-                saveApiKeyToLocal("");
-            } else if (errorMsg.includes("429")) {
-                errorMsg = "请求频率过高，请稍后再试";
-            } else if (errorMsg.includes("insufficient")) {
-                errorMsg = "账户余额不足，请充值";
-            }
-            appendMessageToUI('assistant', `❌ 错误：${errorMsg}`);
-            if (messages.length > 0 && messages[messages.length-1].role === "user") {
-                messages.pop();
-                saveConversation();
-            }
-        } finally {
-            isLoading = false;
-            sendBtn.classList.remove('disabled');
-            userInput.focus();
-            scrollToBottom();
+        let exportText = "DeepSeek 对话导出\n";
+        exportText += `导出时间: ${new Date().toLocaleString()}\n`;
+        exportText += "=".repeat(40) + "\n\n";
+        for (const msg of exportMessages) {
+            const roleName = msg.role === 'user' ? '我' : 'DeepSeek';
+            exportText += `【${roleName}】\n${msg.content}\n\n`;
         }
+        const blob = new Blob([exportText], { type: 'text/plain' });
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.href = url;
+        link.download = `deepseek_chat_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.txt`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showTemporaryError("✅ 对话已导出", 2000);
     }
     
     function promptApiKey() {
@@ -570,10 +807,9 @@
             if (newKey === "") {
                 saveApiKeyToLocal("");
                 showTemporaryError("API Key 已清空", 1500);
-                resetConversation();
             } else {
                 saveApiKeyToLocal(newKey);
-                showTemporaryError("✅ API Key 已保存，对话历史保持不变", 2000);
+                showTemporaryError("✅ API Key 已保存", 2000);
             }
         }
     }
@@ -599,15 +835,11 @@
         clearChatBtn.addEventListener('click', clearAllChat);
         exportChatBtn.addEventListener('click', exportChat);
         
-        // 关键修改：回车只换行，不发送
         userInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
-                // 不做任何事，让回车自然换行
-                // 不调用 preventDefault 也不调用 sendMessage
                 return;
             }
         });
-        
         userInput.addEventListener('input', autoResizeTextarea);
         autoResizeTextarea();
     }
